@@ -1,0 +1,175 @@
+# OpenClaw Tor P2P Node — Containerized Stack
+# Symmetry Labs Infrastructure
+#
+# Services:
+#   tor       — Tor daemon with hidden service, SOCKS5 on :9050
+#   redis     — Hub state bus (multi-container resilience)
+#   agent     — oc-tor-net agent.py under the Hub
+#   prometheus — Metrics scraper
+#   grafana   — Dashboard
+#
+# Usage:
+#   docker compose up -d
+#   docker compose logs -f agent
+#   docker compose exec agent python3 /app/cli.py peers
+#
+# Swarm enrollment:
+#   docker compose exec agent python3 /app/cli.py connect 'INVITE_CODE'
+
+version: "3.9"
+
+networks:
+  tor-internal:
+    driver: bridge
+    internal: true          # no direct egress — all traffic via Tor
+  metrics-net:
+    driver: bridge
+
+volumes:
+  tor-data:
+  agent-data:
+  redis-data:
+  prometheus-data:
+  grafana-data:
+
+services:
+
+  # ── Tor Daemon ────────────────────────────────────────────────────────────
+  tor:
+    image: torproject/tor:latest
+    restart: unless-stopped
+    networks:
+      - tor-internal
+    volumes:
+      - tor-data:/var/lib/tor
+      - ./torrc:/etc/tor/torrc:ro
+    environment:
+      - TOR_LOG_LEVEL=notice
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "9050"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+  # ── Redis — Hub State Bus ─────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks:
+      - tor-internal
+    volumes:
+      - redis-data:/data
+    command: >
+      redis-server
+      --save 60 1
+      --loglevel warning
+      --maxmemory 64mb
+      --maxmemory-policy allkeys-lru
+      --requirepass "${REDIS_PASSWORD:-changeme-in-production}"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme-in-production}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  # ── Agent ─────────────────────────────────────────────────────────────────
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    restart: unless-stopped
+    networks:
+      - tor-internal
+      - metrics-net
+    volumes:
+      - agent-data:/var/lib/oc-tor-net
+      - ./agent.py:/app/agent.py:ro
+    environment:
+      - OC_DATA_DIR=/var/lib/oc-tor-net
+      - OC_LOG_DIR=/var/log/oc-tor-net
+      - OC_AGENT_PORT=8765
+      - OC_METRICS_PORT=9090
+      - TOR_SOCKS_PROXY=socks5h://tor:9050
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-changeme-in-production}@redis:6379/0
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    depends_on:
+      tor:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9090/metrics"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/log/oc-tor-net
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+
+  # ── Prometheus ────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    networks:
+      - metrics-net
+    volumes:
+      - prometheus-data:/prometheus
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"
+    ports:
+      - "127.0.0.1:9191:9090"     # local-only exposure
+    security_opt:
+      - no-new-privileges:true
+
+  # ── Grafana ───────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    networks:
+      - metrics-net
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-changeme}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+    ports:
+      - "127.0.0.1:3000:3000"     # local-only
+    depends_on:
+      - prometheus
+    security_opt:
+      - no-new-privileges:true

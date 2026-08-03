@@ -1,0 +1,26 @@
+# Tor configuration — OpenClaw P2P Node
+# Symmetry Labs Infrastructure
+
+# ── SOCKS5 proxy ─────────────────────────────────────────────────────────────
+SocksPort 0.0.0.0:9050
+SocksPolicy accept 172.16.0.0/12
+SocksPolicy reject *
+
+# ── Hidden service (agent P2P port) ──────────────────────────────────────────
+HiddenServiceDir /var/lib/tor/hidden_service
+HiddenServicePort 8765 agent:8765
+
+# ── Data / logging ────────────────────────────────────────────────────────────
+DataDirectory /var/lib/tor
+Log notice stdout
+
+# ── Security hardening ────────────────────────────────────────────────────────
+AvoidDiskWrites 1
+DisableDebuggerAttachment 1
+HardwareAccel 0
+SafeLogging 1
+
+# ── Circuit tuning ────────────────────────────────────────────────────────────
+MaxCircuitDirtiness 600
+NewCircuitPeriod 30
+NumEntryGuards 3
