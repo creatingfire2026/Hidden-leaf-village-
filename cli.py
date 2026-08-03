@@ -5,13 +5,14 @@ Symmetry Labs Infrastructure
 Usage (inside the agent container):
   python3 /app/cli.py peers
   python3 /app/cli.py ping
-  python3 /app/cli.py invite
+  python3 /app/cli.py invite --token ADMIN_TOKEN
   python3 /app/cli.py connect 'INVITE_CODE'
   python3 /app/cli.py ask 'How many peers are active?'
 """
 
 import argparse
 import json
+import os
 import sys
 import urllib.request
 import urllib.error
@@ -24,12 +25,15 @@ def _get(path: str) -> dict:
         return json.loads(resp.read())
 
 
-def _post(path: str, payload: dict) -> dict:
+def _post(path: str, payload: dict, headers: dict | None = None) -> dict:
     data = json.dumps(payload).encode()
+    req_headers = {"Content-Type": "application/json"}
+    if headers:
+        req_headers.update(headers)
     req = urllib.request.Request(
         f"{BASE_URL}{path}",
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers=req_headers,
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=15) as resp:
@@ -42,13 +46,13 @@ def cmd_peers(_args: argparse.Namespace) -> None:
     if not peers:
         print("No peers known.")
         return
-    print(f"{'NODE ID':36}  {'ONION':56}  {'PORT':6}  {'SEEN (s ago)':12}")
-    print("-" * 120)
+    print(f"{'NODE ID':64}  {'ONION':62}  {'PORT':6}  {'SEEN (s ago)':12}")
+    print("-" * 148)
     import time
     now = time.time()
     for p in peers:
         age = int(now - p.get("seen", now))
-        print(f"{p.get('node_id','?'):36}  {p.get('onion','?'):56}  {p.get('port',0):6}  {age:12}")
+        print(f"{p.get('node_id','?'):64}  {p.get('onion','?'):62}  {p.get('port',0):6}  {age:12}")
 
 
 def cmd_ping(_args: argparse.Namespace) -> None:
@@ -56,8 +60,12 @@ def cmd_ping(_args: argparse.Namespace) -> None:
     print(json.dumps(result, indent=2))
 
 
-def cmd_invite(_args: argparse.Namespace) -> None:
-    result = _post("/invite", {})
+def cmd_invite(args: argparse.Namespace) -> None:
+    token = args.token or os.getenv("OC_ADMIN_TOKEN", "")
+    if not token:
+        print("Error: admin token required (--token or OC_ADMIN_TOKEN env var)", file=sys.stderr)
+        sys.exit(1)
+    result = _post("/invite", {}, headers={"Authorization": "Bearer " + token})
     print("Invite code:", result.get("invite"))
 
 
@@ -80,7 +88,9 @@ def main() -> None:
 
     sub.add_parser("peers", help="List known peers")
     sub.add_parser("ping", help="Ping the local agent")
-    sub.add_parser("invite", help="Generate a swarm invite code")
+
+    p_invite = sub.add_parser("invite", help="Generate a swarm invite code (admin)")
+    p_invite.add_argument("--token", help="Admin bearer token (or set OC_ADMIN_TOKEN)")
 
     p_connect = sub.add_parser("connect", help="Enroll using an invite code")
     p_connect.add_argument("code", help="Invite code")

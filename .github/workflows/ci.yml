@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "copilot/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Python lint & syntax check ────────────────────────────────────────────
+  python-lint:
+    name: Python lint & syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install --quiet -r requirements.txt ruff
+
+      - name: Syntax check
+        run: python -m py_compile agent.py cli.py
+
+      - name: Ruff lint
+        run: ruff check agent.py cli.py
+
+  # ── Compose config validation ─────────────────────────────────────────────
+  compose-validate:
+    name: docker compose config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create placeholder secrets (CI only)
+        run: |
+          mkdir -p secrets
+          printf 'ci-redis-pass'    > secrets/redis_password.txt
+          printf 'ci-grafana-pass'  > secrets/grafana_password.txt
+          printf ''                 > secrets/anthropic_api_key.txt
+          printf 'ci-admin-token'   > secrets/admin_token.txt
+
+      - name: Validate compose file
+        run: docker compose config --quiet
+
+  # ── Docker image build ────────────────────────────────────────────────────
+  docker-build:
+    name: Docker image build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build agent image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.agent
+          push: false
+          tags: oc-agent:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Security — dependency audit ───────────────────────────────────────────
+  security-audit:
+    name: pip-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pip-audit
+        run: pip install --quiet pip-audit
+
+      - name: Audit dependencies
+        run: pip-audit -r requirements.txt
