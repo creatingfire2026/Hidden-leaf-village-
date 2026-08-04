@@ -212,8 +212,8 @@ async def ask_claude(prompt: str) -> str:
         "messages": [{"role": "user", "content": prompt}],
     }
     try:
-        # Claude API is reached directly (not through Tor — configure as needed)
-        async with aiohttp.ClientSession() as session:
+        connector = tor_connector()
+        async with aiohttp.ClientSession(connector=connector) as session:
             async with session.post(
                 "https://api.anthropic.com/v1/messages",
                 headers=headers,
@@ -311,6 +311,11 @@ async def handle_invite_accept(request: web.Request) -> web.Response:
         if not issuer:
             return web.json_response({"error": "invalid or expired invite"}, status=403)
         await redis.delete(f"{REDIS_INVITES_KEY}:{code}")
+        # Register the caller as a peer if they provided their peer record
+        caller = {k: v for k, v in body.items() if k != "invite"}
+        if caller.get("node_id") and caller.get("onion"):
+            await upsert_peer(redis, caller)
+            log.info("Peer enrolled via invite: %s @ %s", caller["node_id"][:8], caller["onion"])
         log.info("Invite %s accepted", code[:8])
         return web.json_response({"status": "enrolled", "issued_by": issuer})
     except Exception as exc:

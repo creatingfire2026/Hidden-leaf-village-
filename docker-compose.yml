@@ -22,6 +22,8 @@ networks:
   tor-internal:
     driver: bridge
     internal: true          # no direct egress — all traffic via Tor
+  tor-egress:
+    driver: bridge          # external network for Tor daemon to reach the internet
   metrics-net:
     driver: bridge
 
@@ -40,8 +42,9 @@ services:
     restart: unless-stopped
     networks:
       - tor-internal
+      - tor-egress
     volumes:
-      - tor-data:/var/lib/tor
+      - agent-data:/var/lib/oc-tor-net
       - ./torrc:/etc/tor/torrc:ro
     environment:
       - TOR_LOG_LEVEL=notice
@@ -95,7 +98,6 @@ services:
     restart: unless-stopped
     networks:
       - tor-internal
-      - metrics-net
     volumes:
       - agent-data:/var/lib/oc-tor-net
       - ./agent.py:/app/agent.py:ro
@@ -137,6 +139,7 @@ services:
     image: prom/prometheus:latest
     restart: unless-stopped
     networks:
+      - tor-internal
       - metrics-net
     volumes:
       - prometheus-data:/prometheus
